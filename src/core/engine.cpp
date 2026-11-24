@@ -116,24 +116,6 @@ Engine::Engine(Capabilities caps, EdgeWidths edges, std::vector<SliderSpec> slid
     m_slots.resize(static_cast<size_t>(m_caps.slotMax - m_caps.slotMin + 1));
 }
 
-void Engine::reconfigure(EdgeWidths edges, std::vector<SliderSpec> sliders, EngineOptions options) {
-    if (m_pendingTap || hasActiveContacts())
-        throw SlotError("recognition reconfiguration requires an idle engine");
-    validateSliderSpecs(sliders);
-    validateEngineOptions(options);
-    m_edges   = edges;
-    m_sliders = std::move(sliders);
-    m_options = options;
-}
-
-void Engine::seedSlotPositions(const std::vector<SlotPosition>& positions) {
-    for (const auto& position : positions) {
-        auto& state      = slotMut(position.slot);
-        state.retainedX  = position.x;
-        state.retainedY  = position.y;
-    }
-}
-
 void Engine::setButtonpad(bool buttonpad) {
     m_buttonpad = buttonpad;
     if (!buttonpad)
@@ -153,6 +135,12 @@ std::vector<Event> Engine::updatePhysicalButton(uint16_t code, bool pressed) {
     if (std::find(m_pressedPhysicalButtons.begin(), m_pressedPhysicalButtons.end(), code) == m_pressedPhysicalButtons.end())
         m_pressedPhysicalButtons.push_back(code);
     return promoteClaimedContacts();
+}
+
+void Engine::restorePressedPhysicalButtons(const std::vector<uint16_t>& codes) {
+    m_pressedPhysicalButtons.clear();
+    if (m_buttonpad)
+        m_pressedPhysicalButtons = codes;
 }
 
 std::vector<Gesture> Engine::interruptTapSequence() {
@@ -179,10 +167,6 @@ FrameOutput Engine::advanceTime(Micros timestamp) {
     FrameOutput output;
     expirePendingTap(timestamp, output);
     return output;
-}
-
-bool Engine::isRecognitionIdle() const {
-    return !m_pendingTap.has_value();
 }
 
 bool Engine::hasClaimedContacts() const {
@@ -252,10 +236,7 @@ FrameOutput Engine::processFrameWithTime(const std::vector<Event>& frame, std::o
 
     for (const auto& event : frame) {
         switch (event.type) {
-            case EventType::SynDropped:
-                resetForResync();
-                output.resyncRequired = true;
-                break;
+            case EventType::SynDropped: resetForResync(); break;
 
             case EventType::Slot:
                 ensureSlot(event.value);

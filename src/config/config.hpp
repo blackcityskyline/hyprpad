@@ -10,10 +10,13 @@
 namespace hyprpad {
 
 struct GestureBinding {
-    Zone                        zone      = Zone::Left;
-    Direction                   direction = Direction::Up;
-    std::optional<uint8_t>      fingers;
-    std::vector<std::string>    action;
+    Zone                     zone      = Zone::Left;
+    Direction                direction = Direction::Up;
+    std::optional<uint8_t>   fingers;
+    std::vector<std::string> action;
+    // edgepad's `action = { log = true }` diagnostic: record the gesture in
+    // status instead of running a command.
+    bool                     logGesture = false;
 };
 
 struct SliderBinding {
@@ -30,10 +33,10 @@ struct Config {
     EngineOptions                  options;
     std::vector<GestureBinding>    gestures;
     std::vector<SliderBinding>     sliders;
-    bool                           swallowPointer    = true;
-    bool                           blockWhileTyping  = false;
-    uint64_t                       typingTimeoutMs   = 500;
-    uint64_t                       generation        = 0;
+    bool                           swallowPointer   = true;
+    bool                           blockWhileTyping = false;
+    uint64_t                       typingTimeoutMs  = 500;
+    uint64_t                       generation       = 0;
 
     // Validates the whole config and derives the recognizer zone/finger sets
     // from the bindings. On failure returns a human readable reason.

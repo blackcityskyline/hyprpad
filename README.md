@@ -21,6 +21,9 @@ tap. Two-finger scroll and pinch are never touched.
 - Sliders along edges that repeat actions while the finger moves.
 - Block-while-typing guard using Hyprland keyboard events.
 - Actions are argv arrays, run without a shell, on a worker thread.
+- An idle touchpad costs no wakeups: the input thread blocks in `poll()`.
+- `action = { log = true }` records gestures for diagnostics instead of running
+  a command.
 
 ## Requirements
 
@@ -51,16 +54,19 @@ hyprpm enable hyprpad
 Or load it from your Lua config:
 
 ```lua
-local ok, err = hl.plugin.load("/path/to/hyprpad.so")
-if not ok then
-    print("hyprpad: " .. tostring(err))
-end
+hl.plugin.load("/path/to/hyprpad.so")
 ```
 
-Then configure it:
+Hyprland registers the path during the config pass and opens the library after
+it, then reloads the config. Put `setup()` in the module that reload requires,
+and skip it when the plugin API is not there yet:
 
 ```lua
-require("plugins/hyprpad")
+hl.plugin.load("/path/to/hyprpad.so")
+if hl.plugin.hyprpad == nil then
+    return
+end
+hl.plugin.hyprpad.setup({ --[[ ... ]] })
 ```
 
 See [`examples/hyprpad.lua`](examples/hyprpad.lua) and
@@ -73,7 +79,9 @@ hyprctl plugin unload /path/to/hyprpad.so
 hyprctl plugin load /path/to/hyprpad.so
 ```
 
-`cmake --build build --target reload` does both for the local build.
+`cmake --build build --target reload` does both for the local build. A
+`hyprctl reload` alone re-applies `setup()` but keeps the loaded library, so a
+rebuilt `.so` needs the unload/load pair.
 
 ## Check
 

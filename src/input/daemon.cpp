@@ -3,14 +3,17 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <climits>
 #include <cstdio>
 #include <cstring>
-#include <climits>
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/input.h>
 #include <poll.h>
+#include <pthread.h>
+#include <sys/eventfd.h>
 #include <sys/ioctl.h>
+#include <thread>
 #include <unistd.h>
 
 namespace hyprpad {
@@ -28,10 +31,10 @@ bool bitSet(const uint8_t* bits, int bit) {
 }
 
 struct DeviceQuery {
-    bool         typeB     = false;
-    bool         pointer   = false;
-    bool         direct    = false;
-    bool         buttonpad = false;
+    bool         typeB      = false;
+    bool         pointer    = false;
+    bool         direct     = false;
+    bool         buttonpad  = false;
     bool         virtualDev = false;
     Capabilities caps;
 };
@@ -39,11 +42,11 @@ struct DeviceQuery {
 // A uinput device can claim any bus id (edgepad's synthetic touchpad says
 // BUS_USB), but its sysfs node always lives under /devices/virtual/.
 bool sysfsVirtual(const std::string& eventPath) {
-    const auto  slash = eventPath.find_last_of('/');
-    const auto  name  = slash == std::string::npos ? eventPath : eventPath.substr(slash + 1);
-    const auto  link  = "/sys/class/input/" + name;
-    char        target[PATH_MAX] = {};
-    const auto  length = readlink(link.c_str(), target, sizeof(target) - 1);
+    const auto slash = eventPath.find_last_of('/');
+    const auto name  = slash == std::string::npos ? eventPath : eventPath.substr(slash + 1);
+    const auto link  = "/sys/class/input/" + name;
+    char       target[PATH_MAX] = {};
+    const auto length = readlink(link.c_str(), target, sizeof(target) - 1);
     if (length <= 0)
         return false;
     return std::string(target, static_cast<size_t>(length)).find("/devices/virtual/") != std::string::npos;
@@ -109,6 +112,58 @@ std::string errorText(const std::string& prefix) {
     return prefix + ": " + std::strerror(errno);
 }
 
+std::optional<std::vector<int32_t>> mtSlotValues(int fd, const Capabilities& caps, uint16_t code) {
+    const int32_t count = caps.slotMax - caps.slotMin + 1;
+    if (count <= 0 || count > 64)
+        return std::nullopt;
+    std::vector<int32_t> request(static_cast<size_t>(count) + 1, 0);
+    request[0] = code;
+    if (ioctl(fd, EVIOCGMTSLOTS(static_cast<int>(request.size() * sizeof(int32_t))), request.data()) < 0)
+        return std::nullopt;
+    return std::vector<int32_t>(request.begin() + 1, request.end());
+}
+
+std::optional<std::vector<uint16_t>> pressedPointerButtons(int fd) {
+    uint8_t keyBits[(KEY_CNT + 7) / 8] = {};
+    if (ioctl(fd, EVIOCGKEY(sizeof(keyBits)), keyBits) < 0)
+        return std::nullopt;
+    std::vector<uint16_t> codes;
+    for (int code = BTN_LEFT; code <= BTN_TASK; ++code) {
+        if (bitSet(keyBits, code))
+            codes.push_back(static_cast<uint16_t>(code));
+    }
+    return codes;
+}
+
+// The kernel dropped events, so the engine cannot know which contacts are
+// already down. Read the current slots and hand them to the engine as
+// passthrough: their history is gone, so they must not become gestures.
+bool resyncEngine(int fd, const Capabilities& caps, Engine& engine) {
+    const auto trackingIds = mtSlotValues(fd, caps, ABS_MT_TRACKING_ID);
+    const auto xValues     = mtSlotValues(fd, caps, ABS_MT_POSITION_X);
+    const auto yValues     = mtSlotValues(fd, caps, ABS_MT_POSITION_Y);
+    if (!trackingIds || !xValues || !yValues)
+        return false;
+
+    const size_t count = std::min({trackingIds->size(), xValues->size(), yValues->size()});
+    std::vector<ResyncContact> contacts;
+    for (size_t index = 0; index < count; ++index) {
+        if ((*trackingIds)[index] < 0)
+            continue;
+        contacts.push_back(ResyncContact{caps.slotMin + static_cast<int32_t>(index), (*trackingIds)[index],
+                                         (*xValues)[index], (*yValues)[index]});
+    }
+
+    try {
+        engine.restorePassthroughContacts(contacts);
+    } catch (const std::exception&) {
+        return false;
+    }
+    if (const auto buttons = pressedPointerButtons(fd))
+        engine.restorePressedPhysicalButtons(*buttons);
+    return true;
+}
+
 } // namespace
 
 std::vector<DeviceCandidate> discoverDevices() {
@@ -164,19 +219,26 @@ Daemon::~Daemon() {
 void Daemon::start() {
     if (m_running.exchange(true))
         return;
+    m_wakeFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     m_actions.start();
-    m_thread = std::thread([this] { inputLoop(); });
+    m_thread = std::thread([this] {
+        pthread_setname_np(pthread_self(), "hyprpad-input");
+        inputLoop();
+    });
 }
 
 void Daemon::stop() {
     if (!m_running.exchange(false))
         return;
-    m_configCv.notify_all();
+    wake();
     if (m_thread.joinable())
         m_thread.join();
     m_actions.stop();
     closeDevice();
     m_swallowMotion.store(false);
+    if (m_wakeFd >= 0)
+        close(m_wakeFd);
+    m_wakeFd = -1;
 }
 
 void Daemon::applyConfig(std::shared_ptr<const Config> config) {
@@ -184,7 +246,36 @@ void Daemon::applyConfig(std::shared_ptr<const Config> config) {
         std::lock_guard lock(m_configMutex);
         m_config = std::move(config);
     }
-    m_configCv.notify_all();
+    wake();
+}
+
+void Daemon::wake() {
+    if (m_wakeFd < 0)
+        return;
+    const uint64_t one = 1;
+    while (write(m_wakeFd, &one, sizeof(one)) < 0 && errno == EINTR) {
+    }
+}
+
+void Daemon::waitForWake(int timeoutMs) {
+    // ponytail: no eventfd (descriptor exhaustion) falls back to timed sleeps;
+    // the compositor stays responsive, the thread just wakes a few times a second.
+    if (m_wakeFd < 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::max(timeoutMs, 1)));
+        return;
+    }
+    pollfd descriptor{m_wakeFd, POLLIN, 0};
+    if (poll(&descriptor, 1, timeoutMs) <= 0)
+        return;
+    uint64_t value = 0;
+    while (read(m_wakeFd, &value, sizeof(value)) > 0) {
+    }
+}
+
+void Daemon::recordLastGesture(const Gesture& gesture) {
+    std::lock_guard lock(m_statusMutex);
+    m_lastGesture = std::string(zoneName(gesture.zone)) + "/" + directionName(gesture.direction) + " " +
+                    std::to_string(gesture.fingers) + "f";
 }
 
 bool Daemon::motionShouldBeSwallowed() const {
@@ -220,6 +311,11 @@ std::string Daemon::status() const {
     text += "gestures: " + std::to_string(m_gestureCount.load()) + "\n";
     text += "slider_steps: " + std::to_string(m_sliderStepCount.load()) + "\n";
     text += "actions: " + std::to_string(m_actions.executedCount()) + "\n";
+    if (const auto config = configSnapshot())
+        text += "bindings: " + std::to_string(config->gestures.size()) + " gestures, " +
+                std::to_string(config->sliders.size()) + " sliders\n";
+    if (!m_lastGesture.empty())
+        text += "last: " + m_lastGesture + "\n";
     if (!m_error.empty())
         text += "error: " + m_error + "\n";
     if (!m_actions.lastError().empty())
@@ -326,12 +422,18 @@ void Daemon::handleOutput(const FrameOutput& output, const Config& config) {
         if (typingBlocked(now))
             continue;
         const auto* binding = config.matchGesture(gesture);
-        if (!binding || binding->action.empty())
+        if (!binding)
+            continue;
+        if (binding->logGesture) {
+            recordLastGesture(gesture);
+            continue;
+        }
+        if (binding->action.empty())
             continue;
         static std::atomic<uint64_t> sequence{0};
         const std::string key = std::string("g:") + zoneName(gesture.zone) + ":" + directionName(gesture.direction) +
                                 ":" + std::to_string(gesture.fingers) + ":" + std::to_string(sequence.fetch_add(1));
-        m_actions.enqueue(key, binding->action, config.generation);
+        m_actions.enqueue(key, binding->action);
     }
 
     for (const auto& step : output.sliderSteps) {
@@ -345,7 +447,7 @@ void Daemon::handleOutput(const FrameOutput& output, const Config& config) {
         if (!action || action->empty())
             continue;
         const std::string key = std::string("s:") + zoneName(step.zone) + ":" + sliderDirectionName(step.direction);
-        m_actions.enqueue(key, *action, config.generation);
+        m_actions.enqueue(key, *action);
     }
 }
 
@@ -365,8 +467,7 @@ void Daemon::inputLoop() {
             applied.reset();
             m_swallowMotion.store(false);
             setStatus("no bindings");
-            std::unique_lock lock(m_configMutex);
-            m_configCv.wait_for(lock, std::chrono::milliseconds(250));
+            waitForWake(250);
             continue;
         }
 
@@ -382,13 +483,11 @@ void Daemon::inputLoop() {
 
         if (!engine) {
             if (applied && applied->generation == config->generation) {
-                std::unique_lock lock(m_configMutex);
-                m_configCv.wait_for(lock, std::chrono::milliseconds(500));
+                waitForWake(500);
                 continue;
             }
             if (!openConfiguredDevice(*config)) {
-                std::unique_lock lock(m_configMutex);
-                m_configCv.wait_for(lock, std::chrono::milliseconds(500));
+                waitForWake(500);
                 continue;
             }
 
@@ -402,8 +501,7 @@ void Daemon::inputLoop() {
             } catch (const std::exception& exception) {
                 setStatus("engine error", exception.what());
                 closeDevice();
-                std::unique_lock lock(m_configMutex);
-                m_configCv.wait_for(lock, std::chrono::milliseconds(500));
+                waitForWake(500);
                 continue;
             }
             engine->setButtonpad(m_device.buttonpad);
@@ -415,16 +513,24 @@ void Daemon::inputLoop() {
             setStatus("running");
         }
 
-        int timeoutMs = 200;
+        int timeoutMs = -1;
         if (const auto deadline = engine->nextDeadline()) {
             const Micros remainingUs = *deadline - steadyNowUs();
-            timeoutMs                = static_cast<int>(std::clamp<Micros>(remainingUs / 1000 + 1, 0, 200));
+            timeoutMs                = static_cast<int>(std::clamp<Micros>(remainingUs / 1000 + 1, 0, 1000));
         }
 
-        pollfd descriptor{m_device.fd, POLLIN, 0};
-        const int ready = poll(&descriptor, 1, timeoutMs);
+        pollfd descriptors[2] = {{m_device.fd, POLLIN, 0}, {m_wakeFd, POLLIN, 0}};
+        const nfds_t descriptorCount = m_wakeFd >= 0 ? 2 : 1;
+        const int    ready           = poll(descriptors, descriptorCount, timeoutMs);
         if (!m_running.load())
             break;
+
+        if (descriptorCount == 2 && (descriptors[1].revents & POLLIN)) {
+            uint64_t value = 0;
+            while (read(m_wakeFd, &value, sizeof(value)) > 0) {
+            }
+            continue;
+        }
 
         if (ready <= 0) {
             if (ready < 0 && errno != EINTR) {
@@ -484,9 +590,14 @@ void Daemon::inputLoop() {
 
                 if (event.type == EV_SYN && event.code == SYN_REPORT) {
                     if (dropped) {
-                        frame.clear();
-                        frame.push_back({EventType::SynDropped, 0});
                         dropped = false;
+                        frame.clear();
+                        pressedButtons.clear();
+                        releasedButtons.clear();
+                        if (!resyncEngine(m_device.fd, m_device.caps, *engine))
+                            engine->processFrameAt({Event{EventType::SynDropped, 0}}, timestamp);
+                        m_swallowMotion.store(config->swallowPointer && engine->hasClaimedContacts());
+                        continue;
                     }
                     if (frame.empty())
                         continue;

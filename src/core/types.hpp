@@ -131,12 +131,6 @@ struct ResyncContact {
     int32_t y          = 0;
 };
 
-struct SlotPosition {
-    int32_t slot = 0;
-    int32_t x    = 0;
-    int32_t y    = 0;
-};
-
 struct EngineOptions {
     Micros  tapMinDuration       = DEFAULT_TAP_MIN_DURATION_MS * 1000;
     Micros  tapMaxDuration       = DEFAULT_TAP_MAX_DURATION_MS * 1000;
@@ -154,7 +148,6 @@ struct FrameOutput {
     std::vector<Event>      passthrough;
     std::vector<Gesture>    gestures;
     std::vector<SliderStep> sliderSteps;
-    bool                    resyncRequired = false;
     // Set when this frame released a contact that looked like an edge tap.
     // The host uses it to swallow the click libinput's tap-to-click produces.
     bool                    tapLike = false;

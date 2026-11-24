@@ -1,7 +1,6 @@
 #include "lua_config.hpp"
 
 #include <cmath>
-#include <cstring>
 
 extern "C" {
 #include <lauxlib.h>
@@ -21,37 +20,39 @@ class Parser {
         Config config;
         config.generation = generation;
 
-        if (!readString("device", config.device, false))
+        if (!readString("device", config.device))
             return fail();
-        if (!readNumber("edge_width", config.edges.left, false) || !readNumber("edge_width", config.edges.right, false) ||
-            !readNumber("edge_width", config.edges.top, false) || !readNumber("edge_width", config.edges.bottom, false))
+        float edgeWidth = config.edges.left;
+        if (!readNumber("edge_width", edgeWidth))
             return fail();
-        // the four calls above overwrite all edges; per-edge overrides follow
-        if (!readNumber("left_edge_width", config.edges.left, false) ||
-            !readNumber("right_edge_width", config.edges.right, false) ||
-            !readNumber("top_edge_width", config.edges.top, false) ||
-            !readNumber("bottom_edge_width", config.edges.bottom, false))
+        if (m_hadField)
+            config.edges = EdgeWidths::all(edgeWidth);
+
+        if (!readNumber("left_edge_width", config.edges.left) ||
+            !readNumber("right_edge_width", config.edges.right) ||
+            !readNumber("top_edge_width", config.edges.top) ||
+            !readNumber("bottom_edge_width", config.edges.bottom))
             return fail();
 
         double number = 0.0;
-        if (!readNumber("tap_min_duration_ms", number, false))
+        if (!readNumber("tap_min_duration_ms", number))
             return fail();
         if (m_hadField)
             config.options.tapMinDuration = static_cast<Micros>(number * 1000.0);
-        if (!readNumber("tap_max_duration_ms", number, false))
+        if (!readNumber("tap_max_duration_ms", number))
             return fail();
         if (m_hadField)
             config.options.tapMaxDuration = static_cast<Micros>(number * 1000.0);
-        if (!readNumber("double_tap_timeout_ms", number, false))
+        if (!readNumber("double_tap_timeout_ms", number))
             return fail();
         if (m_hadField)
             config.options.doubleTapTimeout = static_cast<Micros>(number * 1000.0);
-        if (!readNumber("double_tap_max_distance", config.options.doubleTapMaxDistance, false))
+        if (!readNumber("double_tap_max_distance", config.options.doubleTapMaxDistance))
             return fail();
-        if (!readNumber("swipe_min_distance", config.options.swipeMinDistance, false))
+        if (!readNumber("swipe_min_distance", config.options.swipeMinDistance))
             return fail();
 
-        if (!readBool("swallow_pointer", config.swallowPointer, false))
+        if (!readBool("swallow_pointer", config.swallowPointer))
             return fail();
         if (!readTyping(config))
             return fail();
@@ -81,14 +82,12 @@ class Parser {
             m_error = error;
     }
 
-    bool readString(const char* key, std::string& out, bool required) {
+    bool readString(const char* key, std::string& out) {
         m_hadField = false;
         lua_getfield(m_lua, m_table, key);
         if (lua_isnil(m_lua, -1)) {
             lua_pop(m_lua, 1);
-            if (required)
-                setError(std::string(key) + " is required");
-            return !required;
+            return true;
         }
         if (!lua_isstring(m_lua, -1)) {
             lua_pop(m_lua, 1);
@@ -101,57 +100,40 @@ class Parser {
         return true;
     }
 
-    bool readNumber(const char* key, double& out, bool required) {
+    bool readNumber(const char* key, double& out) {
         m_hadField = false;
         lua_getfield(m_lua, m_table, key);
         if (lua_isnil(m_lua, -1)) {
             lua_pop(m_lua, 1);
-            if (required)
-                setError(std::string(key) + " is required");
-            return !required;
+            return true;
         }
-        if (!lua_isnumber(m_lua, -1)) {
+        const lua_Number value = lua_tonumber(m_lua, -1);
+        if (!std::isfinite(static_cast<double>(value))) {
             lua_pop(m_lua, 1);
-            setError(std::string(key) + " must be a number");
+            setError(std::string(key) + " must be a finite number");
             return false;
         }
-        out        = lua_tonumber(m_lua, -1);
+        out        = value;
         m_hadField = true;
         lua_pop(m_lua, 1);
         return true;
     }
 
-    bool readNumber(const char* key, float& out, bool required) {
+    bool readNumber(const char* key, float& out) {
         double value = 0.0;
-        if (!readNumber(key, value, required))
+        if (!readNumber(key, value))
             return false;
         if (m_hadField)
             out = static_cast<float>(value);
         return true;
     }
 
-    bool readInteger(const char* key, std::optional<uint8_t>& out, bool required) {
-        double value = 0.0;
-        if (!readNumber(key, value, required))
-            return false;
-        if (!m_hadField)
-            return true;
-        if (std::floor(value) != value || value < 1.0 || value > 4.0) {
-            setError(std::string(key) + " must be an integer between 1 and 4");
-            return false;
-        }
-        out = static_cast<uint8_t>(value);
-        return true;
-    }
-
-    bool readBool(const char* key, bool& out, bool required) {
+    bool readBool(const char* key, bool& out) {
         m_hadField = false;
         lua_getfield(m_lua, m_table, key);
         if (lua_isnil(m_lua, -1)) {
             lua_pop(m_lua, 1);
-            if (required)
-                setError(std::string(key) + " is required");
-            return !required;
+            return true;
         }
         if (!lua_isboolean(m_lua, -1)) {
             lua_pop(m_lua, 1);
@@ -177,6 +159,10 @@ class Parser {
             double    timeout = static_cast<double>(config.typingTimeoutMs);
             if (!readBoolAt(table, "enabled", enabled) || !readNumberAt(table, "timeout_ms", timeout))
                 return false;
+            if (!(timeout > 0.0 && timeout <= 10'000.0)) {
+                setError("block_while_typing.timeout_ms must be > 0 and <= 10000");
+                return false;
+            }
             config.blockWhileTyping = enabled;
             config.typingTimeoutMs  = static_cast<uint64_t>(timeout);
             lua_pop(m_lua, 1);
@@ -187,7 +173,7 @@ class Parser {
         }
 
         double timeout = static_cast<double>(config.typingTimeoutMs);
-        if (!readNumber("block_while_typing_timeout_ms", timeout, false))
+        if (!readNumber("block_while_typing_timeout_ms", timeout))
             return false;
         if (m_hadField) {
             if (timeout <= 0.0 || timeout > 10'000.0) {
@@ -231,33 +217,6 @@ class Parser {
             return false;
         }
         out = lua_tonumber(m_lua, -1);
-        lua_pop(m_lua, 1);
-        return true;
-    }
-
-    bool readAction(int table, const std::string& label, std::vector<std::string>& action) {
-        lua_getfield(m_lua, table, "action");
-        if (!lua_istable(m_lua, -1)) {
-            lua_pop(m_lua, 1);
-            setError(label + ".action must be an argv array");
-            return false;
-        }
-        const size_t length = lua_rawlen(m_lua, -1);
-        if (length == 0) {
-            lua_pop(m_lua, 1);
-            setError(label + ".action must not be empty");
-            return false;
-        }
-        for (size_t index = 1; index <= length; ++index) {
-            lua_rawgeti(m_lua, -1, static_cast<lua_Integer>(index));
-            if (!lua_isstring(m_lua, -1)) {
-                lua_pop(m_lua, 2);
-                setError(label + ".action[" + std::to_string(index) + "] must be a string");
-                return false;
-            }
-            action.emplace_back(lua_tostring(m_lua, -1));
-            lua_pop(m_lua, 1);
-        }
         lua_pop(m_lua, 1);
         return true;
     }
@@ -311,7 +270,7 @@ class Parser {
                 lua_pop(m_lua, 2);
                 return false;
             }
-            if (!readAction(table, label, binding.action)) {
+            if (!readGestureAction(table, label, binding)) {
                 lua_pop(m_lua, 2);
                 return false;
             }
@@ -431,6 +390,49 @@ class Parser {
         return true;
     }
 
+    // A gesture action is either an argv array or edgepad's diagnostic
+    // `{ log = true }`, never both.
+    bool readGestureAction(int table, const std::string& label, GestureBinding& binding) {
+        lua_getfield(m_lua, table, "action");
+        if (!lua_istable(m_lua, -1)) {
+            lua_pop(m_lua, 1);
+            setError(label + ".action must be an argv array or { log = true }");
+            return false;
+        }
+
+        lua_getfield(m_lua, -1, "log");
+        if (!lua_isnil(m_lua, -1)) {
+            if (!lua_isboolean(m_lua, -1)) {
+                lua_pop(m_lua, 2);
+                setError(label + ".action.log must be a boolean");
+                return false;
+            }
+            binding.logGesture = lua_toboolean(m_lua, -1) != 0;
+        }
+        lua_pop(m_lua, 1);
+
+        // log = true may stand alone; an argv array alongside it is parsed so
+        // Config::finalize() can reject the ambiguous binding.
+        const size_t length = lua_rawlen(m_lua, -1);
+        if (length == 0 && !binding.logGesture) {
+            lua_pop(m_lua, 1);
+            setError(label + ".action must not be empty");
+            return false;
+        }
+        for (size_t index = 1; index <= length; ++index) {
+            lua_rawgeti(m_lua, -1, static_cast<lua_Integer>(index));
+            if (!lua_isstring(m_lua, -1)) {
+                lua_pop(m_lua, 2);
+                setError(label + ".action[" + std::to_string(index) + "] must be a string");
+                return false;
+            }
+            binding.action.emplace_back(lua_tostring(m_lua, -1));
+            lua_pop(m_lua, 1);
+        }
+        lua_pop(m_lua, 1);
+        return true;
+    }
+
     bool readActionAt(int table, const char* key, std::vector<std::string>& action) {
         lua_getfield(m_lua, table, key);
         if (!lua_istable(m_lua, -1)) {
@@ -469,9 +471,9 @@ class Parser {
         return true;
     }
 
-    lua_State* m_lua   = nullptr;
-    int        m_table = 0;
-    bool       m_hadField = false;
+    lua_State*  m_lua      = nullptr;
+    int         m_table    = 0;
+    bool        m_hadField = false;
     std::string m_error;
 };
 

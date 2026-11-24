@@ -148,6 +148,13 @@ explicitly:
 The program must be on Hyprland's `PATH`. Actions run on a helper thread, so a
 slow command cannot stall gesture recognition.
 
+For diagnostics there is edgepad's `action = { log = true }`, which records the
+gesture in `hyprctl hyprpadstatus` instead of running a command:
+
+```lua
+{ zone = "pad", direction = "tap", fingers = 3, action = { log = true } },
+```
+
 ## Device and edge widths
 
 ```lua
@@ -236,13 +243,26 @@ local devices = hl.plugin.hyprpad.devices()
 From a terminal:
 
 ```bash
-hyprctl hyprpadstatus    # state, device, counters, last error
+hyprctl hyprpadstatus    # state, device, counters, last gesture, last error
 hyprctl hyprpaddevices   # touchpad candidates and readability
 ```
 
+Counters (`gestures`, `slider_steps`, `actions`) accumulate since the plugin was
+loaded and are handy for checking that a binding actually fires.
+
 ## Apply changes
 
-Re-run `setup()` — for example by reloading your Hyprland config. hyprpad
-validates the whole table first and keeps the previous configuration when it
-rejects the new one. Recognition-only changes apply at the next idle frame; a
+Re-run `setup()` — for example with `hyprctl reload`. hyprpad validates the
+whole table first and keeps the previous configuration when it rejects the new
+one. The input thread wakes immediately; a gesture in flight is discarded, and a
 changed `device` closes and reopens the touchpad.
+
+A config reload only re-applies `setup()`. After rebuilding the `.so`, swap the
+library explicitly:
+
+```bash
+hyprctl plugin unload /path/to/hyprpad.so
+hyprctl plugin load /path/to/hyprpad.so
+```
+
+or run `cmake --build build --target reload`.

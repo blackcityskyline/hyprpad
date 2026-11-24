@@ -92,7 +92,9 @@ std::optional<std::string> Config::finalize() {
     for (size_t index = 0; index < gestures.size(); ++index) {
         const auto& gesture = gestures[index];
         const auto  label   = gestureLabel(index);
-        if (gesture.action.empty())
+        if (gesture.logGesture && !gesture.action.empty())
+            return label + ": use either an argv action or log = true, not both";
+        if (!gesture.logGesture && gesture.action.empty())
             return label + ".action must be a non-empty argv array";
 
         if (gesture.fingers && (*gesture.fingers < 1 || *gesture.fingers > 4))

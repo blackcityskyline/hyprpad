@@ -67,6 +67,41 @@ void testValidConfig() {
     lua_close(L);
 }
 
+void testLogAction() {
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+
+    const char* code = R"(
+        return { gestures = {
+            { zone = "pad", direction = "tap", fingers = 3, action = { log = true } },
+        } }
+    )";
+    CHECK(loadTable(L, code));
+    const auto result = parseLuaConfig(L, -1, 3);
+    CHECK(result.config != nullptr);
+    CHECK(result.config->gestures.size() == 1);
+    CHECK(result.config->gestures[0].logGesture);
+    CHECK(result.config->gestures[0].action.empty());
+
+    const Gesture gesture{Zone::Pad, Direction::Tap, 3, 0, 1};
+    const auto*   binding = result.config->matchGesture(gesture);
+    CHECK(binding != nullptr);
+    CHECK(binding->logGesture);
+    lua_pop(L, 1);
+
+    const char* both = R"(
+        return { gestures = {
+            { zone = "left", direction = "tap", action = { "true", log = true } },
+        } }
+    )";
+    CHECK(loadTable(L, both));
+    const auto rejected = parseLuaConfig(L, -1, 4);
+    CHECK(rejected.config == nullptr);
+    CHECK(!rejected.error.empty());
+
+    lua_close(L);
+}
+
 void testLuaErrors() {
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
@@ -90,6 +125,15 @@ void testLuaErrors() {
     result = parseLuaConfig(L, -1, 2);
     CHECK(result.config == nullptr);
     CHECK(result.error.find("slider") != std::string::npos);
+    lua_pop(L, 1);
+
+    const char* invalidTimeout = R"(
+        return { block_while_typing = { enabled = true, timeout_ms = -5 } }
+    )";
+    CHECK(loadTable(L, invalidTimeout));
+    result = parseLuaConfig(L, -1, 3);
+    CHECK(result.config == nullptr);
+    CHECK(!result.error.empty());
 
     lua_close(L);
 }
@@ -98,6 +142,7 @@ void testLuaErrors() {
 
 int main() {
     testValidConfig();
+    testLogAction();
     testLuaErrors();
     std::puts("hyprpad lua config checks passed");
     return 0;

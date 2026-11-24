@@ -2,6 +2,8 @@
 #include "../src/core/engine.hpp"
 #include "check.hpp"
 
+#include <linux/input.h>
+
 #include <vector>
 
 using namespace hyprpad;
@@ -183,6 +185,42 @@ void testPadTap() {
     CHECK(output.gestures[0].fingers == 3);
 }
 
+void testResyncPassthrough() {
+    Engine engine(caps(), EdgeWidths::all(0.10F), {}, tapOptions());
+    auto   output = engine.restorePassthroughContacts({ResyncContact{0, 42, 30, 500}});
+    CHECK(!output.passthrough.empty());
+    CHECK(!engine.hasClaimedContacts());
+
+    std::vector<Event> frame;
+    up(frame, 0, 42);
+    output = engine.processFrameAt(frame, 1'000 * MS);
+    CHECK(output.gestures.empty());
+    CHECK(!engine.hasClaimedContacts());
+}
+
+void testButtonpadRestoreBlocksEdge() {
+    Engine engine(caps(), EdgeWidths::all(0.10F));
+    engine.setButtonpad(true);
+
+    // A physical click is down, so an edge contact that appears during the
+    // click is passthrough, not a gesture.
+    engine.restorePressedPhysicalButtons({BTN_LEFT});
+    std::vector<Event> frame;
+    down(frame, 0, 1, 50, 500);
+    engine.processFrameAt(frame, 1'000 * MS);
+    CHECK(!engine.hasClaimedContacts());
+
+    frame.clear();
+    up(frame, 0, 1);
+    engine.processFrameAt(frame, 1'100 * MS);
+    engine.restorePressedPhysicalButtons({});
+
+    frame.clear();
+    down(frame, 0, 2, 50, 500);
+    engine.processFrameAt(frame, 1'200 * MS);
+    CHECK(engine.hasClaimedContacts());
+}
+
 void testBindingPrecedenceAndValidation() {
     Config config;
     config.gestures.push_back({Zone::Left, Direction::Up, std::nullopt, {"echo", "any"}});
@@ -215,6 +253,8 @@ int main() {
     testSlider();
     testFingerCount();
     testPadTap();
+    testResyncPassthrough();
+    testButtonpadRestoreBlocksEdge();
     testBindingPrecedenceAndValidation();
     std::puts("hyprpad core checks passed");
     return 0;

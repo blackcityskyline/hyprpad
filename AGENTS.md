@@ -33,6 +33,12 @@ running compositor.
   suppressed through cancellable event-bus events only.
 - Axis events are never cancelled: two-finger scroll must keep working.
 - Actions are argv arrays executed without a shell.
+- The input thread must block in `poll()` when idle; config changes and unload
+  use `m_wakeFd`. Do not add periodic ticks.
+- `SYN_DROPPED` is recovered by reading the kernel MT slots and handing the live
+  contacts to `Engine::restorePassthroughContacts`; never guess their history.
+- `action = { log = true }` records gestures in status; it is the documented
+  replacement for edgepad's log action.
 - Config errors must leave the previous configuration running; `setup` returns
   `false, message` rather than throwing across the Lua boundary.
 - Hyprland threads: parse Lua on the main thread, hand the config to the input

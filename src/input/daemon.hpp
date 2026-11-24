@@ -5,7 +5,6 @@
 #include "../core/engine.hpp"
 
 #include <atomic>
-#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -38,8 +37,8 @@ class Daemon {
     void start();
     void stop();
 
-    // The config is parsed on the Hyprland thread; the input thread picks the
-    // newest generation up at an idle frame boundary.
+    // Parsed on the Hyprland thread. The input thread wakes immediately,
+    // discards any gesture in flight, and rebuilds the recognizer.
     void applyConfig(std::shared_ptr<const Config> config);
 
     bool motionShouldBeSwallowed() const;
@@ -64,10 +63,15 @@ class Daemon {
     void setStatus(std::string state, std::string error = {});
     std::shared_ptr<const Config> configSnapshot() const;
     bool typingBlocked(Micros now) const;
+    void wake();
+    void waitForWake(int timeoutMs);
+    void recordLastGesture(const Gesture& gesture);
 
-    mutable std::mutex       m_configMutex;
-    std::condition_variable  m_configCv;
+    mutable std::mutex            m_configMutex;
     std::shared_ptr<const Config> m_config;
+    // Wakes the input thread out of poll() when a config arrives or the plugin
+    // unloads, so an idle pad costs zero wakeups instead of a 200 ms tick.
+    int m_wakeFd = -1;
 
     std::atomic<bool>      m_running{false};
     std::thread            m_thread;
@@ -77,6 +81,7 @@ class Daemon {
     std::string            m_state = "no config";
     std::string            m_statusDevice;
     std::string            m_statusName;
+    std::string            m_lastGesture;
     std::string            m_error;
 
     std::atomic<bool>      m_swallowMotion{false};
