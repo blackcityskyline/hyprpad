@@ -1,0 +1,4 @@
+# Grant the active local seat user read access to touchpads so hyprpad can
+# observe them. hyprpad never writes to the device, so no /dev/uinput rule is
+# needed.
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", TAG+="uaccess"
