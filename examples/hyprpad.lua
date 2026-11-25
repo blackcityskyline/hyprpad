@@ -20,6 +20,11 @@ local ok, err = hl.plugin.hyprpad.setup({
     -- owned by hyprpad. Two-finger scroll and pinch still reach applications.
     swallow_pointer = true,
 
+    -- Optional low-pass for touchpads whose cursor jitters at light pressure.
+    -- Steady motion stays 1:1; only the frame-to-frame wobble is damped.
+    smooth_pointer = false,
+    smooth_strength = 0.6,
+
     -- Suppress gestures and slider steps for a short window after a keystroke.
     block_while_typing = { enabled = false, timeout_ms = 500 },
 

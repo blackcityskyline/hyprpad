@@ -1,5 +1,6 @@
 #include "lua_config.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 extern "C" {
@@ -54,6 +55,11 @@ class Parser {
 
         if (!readBool("swallow_pointer", config.swallowPointer))
             return fail();
+        if (!readBool("smooth_pointer", config.smoothPointer))
+            return fail();
+        if (!readNumber("smooth_strength", config.smoothStrength))
+            return fail();
+        config.smoothStrength = std::clamp(config.smoothStrength, 0.0F, 1.0F);
         if (!readTyping(config))
             return fail();
         if (!readGestures(config))

@@ -34,6 +34,11 @@ struct Config {
     std::vector<GestureBinding>    gestures;
     std::vector<SliderBinding>     sliders;
     bool                           swallowPointer   = true;
+    // Optional low-pass on touchpad pointer motion for cheap pads whose
+    // coordinates jitter at light pressure. Off by default: it is a comfort
+    // setting, not part of the recognizer.
+    bool                           smoothPointer    = false;
+    float                          smoothStrength   = 0.6F;
     bool                           blockWhileTyping = false;
     uint64_t                       typingTimeoutMs  = 500;
     uint64_t                       generation       = 0;

@@ -1,5 +1,6 @@
 #include "../src/config/config.hpp"
 #include "../src/core/engine.hpp"
+#include "../src/core/smoothing.hpp"
 #include "check.hpp"
 
 #include <linux/input.h>
@@ -247,6 +248,56 @@ void testBindingPrecedenceAndValidation() {
     CHECK(conflicting.finalize().has_value());
 }
 
+void testMotionSmoothing() {
+    // Steady motion must come out 1:1: smoothing delays travel, it must not
+    // shrink it, or the cursor would feel like it lost sensitivity.
+    MotionSmoother stroke;
+    stroke.setStrength(0.6F);
+    float travel = 0.0F;
+    float outX    = 0.0F;
+    float outY    = 0.0F;
+    for (int i = 0; i < 200; ++i) {
+        stroke.apply(10.0F, 0.0F, 1000 + static_cast<uint32_t>(i) * 8, outX, outY);
+        travel += outX;
+    }
+    CHECK(std::abs(travel - 2000.0F) < 60.0F);
+
+    // Frame-to-frame jitter with a still finger is damped.
+    MotionSmoother jitter;
+    jitter.setStrength(0.6F);
+    float maxStep = 0.0F;
+    float drift   = 0.0F;
+    for (int i = 0; i < 100; ++i) {
+        const float in = (i % 2) ? 1.0F : -1.0F;
+        jitter.apply(in, 0.0F, 5000 + static_cast<uint32_t>(i) * 8, outX, outY);
+        maxStep = std::max(maxStep, std::abs(outX));
+        drift += outX;
+    }
+    CHECK(maxStep < 0.6F);
+    CHECK(std::abs(drift) < 2.0F);
+
+    // A single-frame spike (the pad losing and re-acquiring its contact) must
+    // not drag the cursor with it.
+    MotionSmoother spike;
+    spike.setStrength(0.6F);
+    float maxSpike = 0.0F;
+    for (int i = 0; i < 40; ++i) {
+        const float in = (i == 20) ? 10.0F : 1.0F;
+        spike.apply(in, 0.0F, 9000 + static_cast<uint32_t>(i) * 8, outX, outY);
+        if (i > 5)
+            maxSpike = std::max(maxSpike, std::abs(outX));
+    }
+    CHECK(maxSpike < 2.5F);
+
+    // A pause longer than the gap starts a fresh touch with no leftover motion.
+    MotionSmoother restart;
+    restart.setStrength(0.6F);
+    restart.apply(20.0F, 0.0F, 7000, outX, outY);
+    restart.apply(0.0F, 0.0F, 7400, outX, outY);
+    CHECK(outX == 0.0F);
+    CHECK(outY == 0.0F);
+}
+
 } // namespace
 
 int main() {
@@ -260,6 +311,7 @@ int main() {
     testResyncPassthrough();
     testButtonpadRestoreBlocksEdge();
     testBindingPrecedenceAndValidation();
+    testMotionSmoothing();
     std::puts("hyprpad core checks passed");
     return 0;
 }

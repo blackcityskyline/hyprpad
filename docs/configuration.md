@@ -220,6 +220,37 @@ swallow_pointer = false, -- pass motion and clicks through
 Turn it off if you want edge gestures to behave like plain touchpad input for
 the applications under them.
 
+## Pointer smoothing
+
+Cheap touchpads jitter at light pressure: the controller's position estimate
+wobbles, and a very light finger can even drop and re-acquire its contact. The
+compositor passes that wobble to the cursor unchanged. This optional low-pass
+filters touchpad motion only; mice and tablets are untouched.
+
+```lua
+smooth_pointer = true,   -- off by default
+smooth_strength = 0.6,   -- 0..1, higher = more damping
+```
+
+Steady motion stays 1:1 and total travel is never shortened, so it does not
+change sensitivity: the cursor lags a few milliseconds instead. Fast flicks
+pass through nearly unfiltered. It cannot remove the jitter completely — that
+is the pad, not Hyprland — but it makes it much less visible.
+
+Tune it live while moving the cursor, then put the value into the config:
+
+```bash
+hyprctl hyprpad-smooth 0.6    # 0 = off, 1 = maximum damping
+hyprctl hyprpad-smooth off
+hyprctl hyprpadstatus         # shows the value in use
+```
+
+The runtime value is not persisted; `smooth_strength` is what survives a
+restart and a config reload.
+
+Smoothing needs a function hook on `CInputManager::onMouseMoved`; if that
+fails, hyprpad logs it and everything else keeps working.
+
 ## Block while typing
 
 `block_while_typing` suppresses gestures and slider steps for a short window

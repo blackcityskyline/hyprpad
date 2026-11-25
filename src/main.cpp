@@ -1,8 +1,10 @@
 #include "config/lua_config.hpp"
+#include "core/smoothing.hpp"
 #include "input/daemon.hpp"
 
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
+#include <hyprland/src/devices/IPointer.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
@@ -32,8 +34,44 @@ CHyprSignalListener               g_swipeEndListener;
 bool                              g_swipeCancelled = false;
 std::atomic<uint64_t>             g_generation{0};
 
+// Optional touchpad motion smoothing. Hyprland's mouse.move bus event only lets
+// a listener cancel a move, not change its delta, so this needs a function hook
+// on CInputManager::onMouseMoved. Off unless smooth_pointer is set.
+struct PointerSmoothing {
+    bool           enabled  = false;
+    float          strength = 0.0F;
+    MotionSmoother delta;
+    MotionSmoother unaccel;
+
+    void configure(bool on, float value) {
+        enabled  = on;
+        strength = value;
+        delta.setStrength(value);
+        unaccel.setStrength(value);
+    }
+};
+
+PointerSmoothing g_smoothing;
+HANDLE            g_handle               = nullptr;
+CFunctionHook*    g_mouseMoveHook        = nullptr;
+void*             g_onMouseMovedOriginal = nullptr;
+
+using PONMOUSEMOVED = void (*)(void*, IPointer::SMotionEvent);
+
+void hkOnMouseMoved(void* self, IPointer::SMotionEvent event) {
+    if (g_smoothing.enabled && event.device && event.device->m_isTouchpad) {
+        float        x   = 0.0F;
+        float        y   = 0.0F;
+        g_smoothing.delta.apply(static_cast<float>(event.delta.x), static_cast<float>(event.delta.y), event.timeMs, x, y);
+        event.delta = Vector2D(x, y);
+        g_smoothing.unaccel.apply(static_cast<float>(event.unaccel.x), static_cast<float>(event.unaccel.y), event.timeMs, x, y);
+        event.unaccel = Vector2D(x, y);
+    }
+    reinterpret_cast<PONMOUSEMOVED>(g_onMouseMovedOriginal)(self, event);
+}
+
 constexpr const char* PLUGIN_NAME    = "hyprpad";
-constexpr const char* PLUGIN_VERSION = "0.1.0";
+constexpr const char* PLUGIN_VERSION = "0.1.5";
 
 void logError(const std::string& message) {
     LOG(Hyprutils::CLI::LOG_ERR, "[hyprpad] {}", message);
@@ -41,6 +79,18 @@ void logError(const std::string& message) {
 
 void logInfo(const std::string& message) {
     LOG(Hyprutils::CLI::LOG_DEBUG, "[hyprpad] {}", message);
+}
+
+std::string statusText() {
+    std::string text = g_daemon ? g_daemon->status() : std::string("state: plugin not running\n");
+    text += "smoothing: ";
+    if (!g_smoothing.enabled)
+        text += "off\n";
+    else {
+        text += std::to_string(g_smoothing.strength);
+        text += g_mouseMoveHook ? "\n" : " (hook unavailable)\n";
+    }
+    return text;
 }
 
 int luaSetup(lua_State* L) {
@@ -61,14 +111,18 @@ int luaSetup(lua_State* L) {
 
     const size_t gestures = result.config->gestures.size();
     const size_t sliders  = result.config->sliders.size();
+    const bool   smooth   = result.config->smoothPointer;
+    const float  strength = result.config->smoothStrength;
     g_daemon->applyConfig(std::move(result.config));
-    logInfo("config applied: " + std::to_string(gestures) + " gestures, " + std::to_string(sliders) + " sliders");
+    g_smoothing.configure(smooth, strength);
+    logInfo("config applied: " + std::to_string(gestures) + " gestures, " + std::to_string(sliders) + " sliders, smoothing " +
+            (smooth ? "on" : "off"));
     lua_pushboolean(L, 1);
     return 1;
 }
 
 int luaStatus(lua_State* L) {
-    const std::string status = g_daemon ? g_daemon->status() : "state: plugin not running\n";
+    const std::string status = statusText();
     lua_pushlstring(L, status.data(), status.size());
     return 1;
 }
@@ -126,10 +180,27 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
 }
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
-    g_daemon = std::make_unique<Daemon>();
+    g_handle  = handle;
+    g_daemon  = std::make_unique<Daemon>();
     g_daemon->start();
 
     auto& events = Event::bus()->m_events;
+
+    // Optional: smooth touchpad motion before Hyprland applies it. Failing to
+    // find the function only disables the filter; gestures keep working.
+    for (const auto& match : HyprlandAPI::findFunctionsByName(handle, "onMouseMoved")) {
+        if (match.demangled.find("CInputManager::onMouseMoved(") == std::string::npos)
+            continue;
+        g_mouseMoveHook = HyprlandAPI::createFunctionHook(handle, match.address, reinterpret_cast<void*>(&hkOnMouseMoved));
+        if (g_mouseMoveHook && g_mouseMoveHook->hook()) {
+            g_onMouseMovedOriginal = g_mouseMoveHook->m_original;
+            logInfo("pointer smoothing hook installed");
+        } else {
+            logError("pointer smoothing unavailable: could not hook onMouseMoved");
+            g_mouseMoveHook = nullptr;
+        }
+        break;
+    }
 
     g_mouseMoveListener = events.input.mouse.move.listen([](Vector2D, Event::SCallbackInfo& info) {
         if (g_daemon && g_daemon->motionShouldBeSwallowed())
@@ -170,7 +241,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprlandAPI::addDispatcherV2(handle, "hyprpad:status", [](std::string) -> SDispatchResult {
         if (!g_daemon)
             return {.success = false, .error = "hyprpad is not running"};
-        logInfo("status\n" + g_daemon->status());
+        logInfo(statusText());
         return {.success = true};
     });
 
@@ -179,11 +250,36 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         return {.success = true};
     });
 
+    // Live tuning for smooth_strength, so finding the right damping does not
+    // need a config edit and reload per attempt. Not persisted; the config
+    // value is what survives a restart.
+    HyprlandAPI::registerHyprCtlCommand(
+        handle, IPC::Socket1::SCommand{.name    = "hyprpad-smooth",
+                                       .match   = IPC::Socket1::COMMAND_MATCH_PREFIX,
+                                       .handler = [](const IPC::Socket1::SRequest& request) -> IPC::Socket1::SResponse {
+                                           const std::string arg = request.command.substr(std::string("hyprpad-smooth").size());
+                                           const auto        value = arg.find_first_not_of(" \t");
+                                           if (value == std::string::npos)
+                                               return IPC::Socket1::SResponse{"usage: hyprctl hyprpad-smooth <0..1|off>\n"};
+                                           const std::string setting = arg.substr(value);
+                                           if (setting == "off") {
+                                               g_smoothing.configure(false, 0.0F);
+                                               return IPC::Socket1::SResponse{"smoothing off\n"};
+                                           }
+                                           try {
+                                               const float strength = std::stof(setting);
+                                               g_smoothing.configure(true, strength);
+                                               return IPC::Socket1::SResponse{"smooth_strength = " + std::to_string(strength) + "\n"};
+                                           } catch (...) {
+                                               return IPC::Socket1::SResponse{"usage: hyprctl hyprpad-smooth <0..1|off>\n"};
+                                           }
+                                       }});
+
     HyprlandAPI::registerHyprCtlCommand(
         handle, IPC::Socket1::SCommand{.name    = "hyprpadstatus",
                                        .match   = IPC::Socket1::COMMAND_MATCH_EXACT,
                                        .handler = [](const IPC::Socket1::SRequest&) -> IPC::Socket1::SResponse {
-                                           return IPC::Socket1::SResponse{g_daemon ? g_daemon->status() + "\n" : "not running\n"};
+                                           return IPC::Socket1::SResponse{statusText()};
                                        }});
 
     HyprlandAPI::registerHyprCtlCommand(
@@ -211,6 +307,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    if (g_mouseMoveHook) {
+        HyprlandAPI::removeFunctionHook(g_handle, g_mouseMoveHook);
+        g_mouseMoveHook        = nullptr;
+        g_onMouseMovedOriginal = nullptr;
+    }
     g_mouseMoveListener.reset();
     g_mouseButtonListener.reset();
     g_keyboardListener.reset();

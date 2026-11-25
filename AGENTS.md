@@ -30,7 +30,11 @@ running compositor.
   tested without a session; keep it that way.
 - Never grab the touchpad and never create a uinput device. The plugin observes
   evdev read-only and lets Hyprland own the pointer. Pointer side effects are
-  suppressed through cancellable event-bus events only.
+  suppressed through cancellable event-bus events only, with one deliberate
+  exception: the optional `smooth_pointer` low-pass hooks
+  `CInputManager::onMouseMoved` to damp touchpad deltas. It never runs unless
+  the config enables it, it only touches touchpad events, and a failed hook must
+  leave gestures working.
 - Axis events are never cancelled: two-finger scroll must keep working.
 - Actions are argv arrays executed without a shell.
 - The input thread must block in `poll()` when idle; config changes and unload
