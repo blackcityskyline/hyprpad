@@ -10,7 +10,8 @@ Hyprland plugin: touchpad edge gestures with Lua configuration. A C++ port of
 - `src/input/` — evdev discovery and the input thread.
 - `src/actions/` — argv action runner with per-key coalescing.
 - `src/main.cpp` — plugin init, Lua functions, dispatchers, event-bus hooks.
-- `tests/` — CTest binaries, no compositor needed.
+- `tests/` — CTest binaries (`core`, `lua_config`) plus `e2e_touchpad.py`, which
+  drives a uinput touchpad into a live session and skips without one.
 - `examples/`, `docs/`, `packaging/` — user-facing configuration and udev rule.
 
 ## Build and check
@@ -44,7 +45,12 @@ running compositor.
 - `action = { log = true }` records gestures in status; it is the documented
   replacement for edgepad's log action.
 - Config errors must leave the previous configuration running; `setup` returns
-  `false, message` rather than throwing across the Lua boundary.
+  `false, message` rather than throwing across the Lua boundary. `hyprctl eval`
+  reports `ok` whatever the return value, so the rejection must also be visible
+  in `hyprpadstatus` as `config error:`.
+- The e2e test measures the cursor and the status counters, not internals: a
+  kernel-suppressed unchanged EV_ABS value must never be assumed to arrive, and
+  a config change reopens the device, so wait for the status to match after it.
 - Hyprland threads: parse Lua on the main thread, hand the config to the input
   thread, and let the input thread touch the engine.
 - The recognizer behaviour is intentionally identical to edgepad's. Change it

@@ -91,11 +91,16 @@ hyprctl hyprpadstatus    # device, counters, last error
 hyprctl hyprpaddevices   # touchpad candidates
 ```
 
-Unit checks need no compositor:
+Unit checks need no compositor. The end-to-end check drives a virtual touchpad
+into the running session and verifies gestures, slider swallowing, the smoothing
+hook and config rejection; it skips when no compositor is reachable:
 
 ```bash
 ctest --test-dir build --output-on-failure
+ctest --test-dir build -R e2e --output-on-failure   # integration only
 ```
+
+The e2e run needs `python-evdev` and leaves the plugin back on your own config.
 
 ## Differences from edgepad
 

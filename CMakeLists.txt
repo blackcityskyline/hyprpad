@@ -50,6 +50,14 @@ target_link_directories(hyprpad_lua_config_check PRIVATE ${LUA_LIBRARY_DIRS})
 target_link_libraries(hyprpad_lua_config_check PRIVATE ${LUA_LIBRARIES})
 add_test(NAME lua_config COMMAND hyprpad_lua_config_check)
 
+# E2E drives a virtual touchpad into the running compositor and asserts real
+# behaviour. It skips (77) without a session, so `ctest` still works headless.
+find_program(PYTHON3_EXECUTABLE python3)
+if(PYTHON3_EXECUTABLE)
+    add_test(NAME e2e COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e_touchpad.py)
+    set_tests_properties(e2e PROPERTIES SKIP_RETURN_CODE 77 LABELS integration TIMEOUT 180)
+endif()
+
 add_custom_target(reload
     COMMAND bash -c "hyprctl plugin unload $<TARGET_FILE:hyprpad> || true"
     COMMAND hyprctl plugin load $<TARGET_FILE:hyprpad>
