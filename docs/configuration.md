@@ -285,6 +285,10 @@ hyprctl hyprpaddevices   # touchpad candidates and readability
 Counters (`gestures`, `slider_steps`, `actions`) accumulate since the plugin was
 loaded and are handy for checking that a binding actually fires.
 
+A rejected configuration shows up as `config error: <reason>`. `hyprctl eval`
+always prints `ok`, so that line is the only sign that a `setup()` call did
+nothing and the previous configuration is still the one running.
+
 ## Apply changes
 
 Re-run `setup()` — for example with `hyprctl reload`. hyprpad validates the

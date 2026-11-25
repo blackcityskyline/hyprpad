@@ -51,6 +51,11 @@ struct PointerSmoothing {
     }
 };
 
+// Last config rejection, surfaced in status: hyprctl eval returns "ok" even
+// when the plugin's lua function returns false, so this is the only way a
+// user sees why their config did nothing.
+std::string       g_configError;
+
 PointerSmoothing g_smoothing;
 HANDLE            g_handle               = nullptr;
 CFunctionHook*    g_mouseMoveHook        = nullptr;
@@ -71,7 +76,7 @@ void hkOnMouseMoved(void* self, IPointer::SMotionEvent event) {
 }
 
 constexpr const char* PLUGIN_NAME    = "hyprpad";
-constexpr const char* PLUGIN_VERSION = "0.1.5";
+constexpr const char* PLUGIN_VERSION = "0.1.6";
 
 void logError(const std::string& message) {
     LOG(Hyprutils::CLI::LOG_ERR, "[hyprpad] {}", message);
@@ -90,6 +95,8 @@ std::string statusText() {
         text += std::to_string(g_smoothing.strength);
         text += g_mouseMoveHook ? "\n" : " (hook unavailable)\n";
     }
+    if (!g_configError.empty())
+        text += "config error: " + g_configError + "\n";
     return text;
 }
 
@@ -103,6 +110,7 @@ int luaSetup(lua_State* L) {
     const uint64_t generation = g_generation.fetch_add(1) + 1;
     auto           result     = parseLuaConfig(L, 1, generation);
     if (!result.config) {
+        g_configError = result.error;
         logError("config rejected: " + result.error);
         lua_pushboolean(L, 0);
         lua_pushlstring(L, result.error.data(), result.error.size());
@@ -113,6 +121,7 @@ int luaSetup(lua_State* L) {
     const size_t sliders  = result.config->sliders.size();
     const bool   smooth   = result.config->smoothPointer;
     const float  strength = result.config->smoothStrength;
+    g_configError.clear();
     g_daemon->applyConfig(std::move(result.config));
     g_smoothing.configure(smooth, strength);
     logInfo("config applied: " + std::to_string(gestures) + " gestures, " + std::to_string(sliders) + " sliders, smoothing " +
