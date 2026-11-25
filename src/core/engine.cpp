@@ -179,6 +179,21 @@ bool Engine::hasActiveContacts() const {
     return std::any_of(m_slots.begin(), m_slots.end(), [](const SlotState& state) { return state.active; });
 }
 
+bool Engine::hasSliderContacts() const {
+    return std::any_of(m_slots.begin(), m_slots.end(), [](const SlotState& state) {
+        return state.active && state.ownership == Ownership::Claimed && state.contactPhase == ContactPhase::ConsumedBySlider;
+    });
+}
+
+Micros Engine::sliderActivityAt() const {
+    Micros latest = 0;
+    for (const auto& state : m_slots) {
+        if (state.active && state.ownership == Ownership::Claimed && state.contactPhase == ContactPhase::ConsumedBySlider)
+            latest = std::max(latest, state.lastActivity);
+    }
+    return latest;
+}
+
 std::optional<Micros> Engine::nextDeadline() const {
     if (!m_pendingTap)
         return std::nullopt;
@@ -276,6 +291,8 @@ FrameOutput Engine::processFrameWithTime(const std::vector<Event>& frame, std::o
                 auto&      state = slotMut(m_currentSlot);
                 (isX ? state.retainedX : state.retainedY) = event.value;
                 (isX ? state.currentX : state.currentY)   = event.value;
+                if (state.active && timestamp)
+                    state.lastActivity = *timestamp;
                 if (state.active && !(isX ? state.startX : state.startY))
                     (isX ? state.startX : state.startY) = event.value;
                 state.observePosition(m_caps, m_options.swipeMinDistance);

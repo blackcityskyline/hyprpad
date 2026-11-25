@@ -279,19 +279,21 @@ void Daemon::recordLastGesture(const Gesture& gesture) {
 }
 
 bool Daemon::motionShouldBeSwallowed() const {
-    // A palm resting in an edge zone keeps its contact claimed but emits no
-    // events. Without the liveness check that would swallow pointer motion
-    // from every other device until the palm lifts.
-    return m_swallowMotion.load() && steadyNowUs() - m_lastTouchFrame.load() < 250'000;
+    // Only an edge slider needs the pointer held still. The activity stamp is
+    // the slider contact's own, so a palm parked on an edge (or any other
+    // finger moving the pad) cannot pin the cursor down.
+    return m_swallowMotion.load() && steadyNowUs() - m_lastSwallowActivity.load() < 250'000;
 }
 
 bool Daemon::contactsClaimed() const {
     return m_claimedContacts.load();
 }
 
-void Daemon::setClaimed(bool claimed, bool swallowPointer) {
+void Daemon::setClaimed(bool claimed, bool swallowPointer, Micros swallowActivity) {
     m_claimedContacts.store(claimed);
     m_swallowMotion.store(claimed && swallowPointer);
+    if (claimed && swallowActivity != 0)
+        m_lastSwallowActivity.store(swallowActivity);
 }
 
 bool Daemon::consumeClickSuppression() {
@@ -555,7 +557,7 @@ void Daemon::inputLoop() {
             try {
                 const auto output = engine->advanceTime(steadyNowUs());
                 handleOutput(output, *config);
-                setClaimed(engine->hasClaimedContacts(), config->swallowPointer);
+                setClaimed(engine->hasClaimedContacts(), config->swallowPointer && engine->hasSliderContacts(), engine->sliderActivityAt());
             } catch (const std::exception& exception) {
                 setStatus("recognizer error", exception.what());
                 closeDevice();
@@ -601,7 +603,6 @@ void Daemon::inputLoop() {
                 }
 
                 if (event.type == EV_SYN && event.code == SYN_REPORT) {
-                    m_lastTouchFrame.store(steadyNowUs());
                     if (dropped) {
                         dropped = false;
                         frame.clear();
@@ -609,7 +610,7 @@ void Daemon::inputLoop() {
                         releasedButtons.clear();
                         if (!resyncEngine(m_device.fd, m_device.caps, *engine))
                             engine->processFrameAt({Event{EventType::SynDropped, 0}}, timestamp);
-                        setClaimed(engine->hasClaimedContacts(), config->swallowPointer);
+                        setClaimed(engine->hasClaimedContacts(), config->swallowPointer && engine->hasSliderContacts(), engine->sliderActivityAt());
                         continue;
                     }
                     if (frame.empty())
@@ -638,7 +639,7 @@ void Daemon::inputLoop() {
                         handleOutput(gesturesOnly, *config);
                     }
                     handleOutput(output, *config);
-                    setClaimed(engine->hasClaimedContacts(), config->swallowPointer);
+                    setClaimed(engine->hasClaimedContacts(), config->swallowPointer && engine->hasSliderContacts(), engine->sliderActivityAt());
                     continue;
                 }
 

@@ -70,7 +70,7 @@ class Daemon {
     void wake();
     void waitForWake(int timeoutMs);
     void recordLastGesture(const Gesture& gesture);
-    void setClaimed(bool claimed, bool swallowPointer);
+    void setClaimed(bool claimed, bool swallowPointer, Micros swallowActivity = 0);
 
     mutable std::mutex            m_configMutex;
     std::shared_ptr<const Config> m_config;
@@ -91,7 +91,7 @@ class Daemon {
 
     std::atomic<bool>      m_swallowMotion{false};
     std::atomic<bool>      m_claimedContacts{false};
-    std::atomic<Micros>    m_lastTouchFrame{0};
+    std::atomic<Micros>    m_lastSwallowActivity{0};
     std::atomic<Micros>    m_clickUntil{0};
     std::atomic<Micros>    m_typingUntil{0};
     std::atomic<uint64_t>  m_gestureCount{0};

@@ -33,6 +33,11 @@ class Engine {
 
     bool hasClaimedContacts() const;
     bool hasActiveContacts() const;
+    // Only a contact that is actually stepping an edge slider should freeze the
+    // pointer. Gestures are recognised on lift, so owning them must not stop
+    // cursor motion for the whole touch (that read as lag and lost contacts).
+    bool   hasSliderContacts() const;
+    Micros sliderActivityAt() const;
 
     FrameOutput restorePassthroughContacts(const std::vector<ResyncContact>& contacts);
 
@@ -62,6 +67,7 @@ class Engine {
         std::optional<int32_t> retainedY;
         bool                   beganInFrame        = false;
         std::optional<Micros>  startedAt;
+        Micros                 lastActivity        = 0;
         bool                   tapSequenceEligible = true;
         bool                   tapSequenceMatch    = false;
         bool                   tapGroupMember      = false;

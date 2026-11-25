@@ -8,9 +8,10 @@ double-taps that start in a screen-edge band, and runs your commands. It is a
 port of [edgepad](../edgepad)'s recognizer to run inside the compositor.
 
 Because it runs inside Hyprland, it can hide its own side effects: while an edge
-contact is owned by hyprpad, pointer motion is cancelled, and the pointer press
+contact is driving a slider, pointer motion is cancelled, and the pointer press
 that libinput turns tap-to-click into is swallowed for a moment after an edge
-tap. Two-finger scroll and pinch are never touched.
+tap. Swipes and taps fire on lift, so they leave the cursor alone. Two-finger
+scroll and pinch are never touched.
 
 ## Features
 

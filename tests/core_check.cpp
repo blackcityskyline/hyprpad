@@ -48,6 +48,8 @@ void testEdgeSwipe() {
     auto output = engine.processFrameAt(frame, 1'000 * MS);
     CHECK(output.gestures.empty());
     CHECK(engine.hasClaimedContacts());
+    // Owning a gesture contact must not freeze the cursor; only a slider does.
+    CHECK(!engine.hasSliderContacts());
 
     frame.clear();
     move(frame, 0, 50, 300);
@@ -131,6 +133,8 @@ void testSlider() {
     CHECK(output.sliderSteps.size() == 2);
     CHECK(output.sliderSteps[0].direction == SliderDirection::Up);
     CHECK(output.gestures.empty());
+    CHECK(engine.hasSliderContacts());
+    CHECK(engine.sliderActivityAt() == 1'010 * MS);
 
     frame.clear();
     up(frame, 0, 1);

@@ -200,14 +200,18 @@ Edges without a double-tap binding run taps immediately on release.
 
 ## Pointer side effects
 
-hyprpad owns edge contacts, and by default it hides their side effects from
-applications:
+hyprpad owns edge contacts, and by default it hides the side effects that would
+fight an edge slider:
 
-- while an edge-owned contact exists, pointer motion events are cancelled, so
-  the cursor does not drift while you slide along an edge;
+- while an edge-owned contact is driving a slider, pointer motion events are
+  cancelled, so the cursor does not drift while you slide brightness or volume;
 - shortly after an edge tap, the next pointer press is cancelled, which
   swallows libinput's own tap-to-click so an edge tap does not also click;
 - axis (scroll) events are never cancelled: two-finger scroll still works.
+
+Swipes and taps are recognised when the finger lifts, so they no longer hold
+the cursor still for the whole touch: only a contact that actually stepped a
+slider cancels motion.
 
 ```lua
 swallow_pointer = false, -- pass motion and clicks through
