@@ -42,6 +42,10 @@ class Daemon {
     void applyConfig(std::shared_ptr<const Config> config);
 
     bool motionShouldBeSwallowed() const;
+    // True while a contact the recognizer claims (edge zone) is still down.
+    // Hyprland's own touchpad gestures are cancelled on this, so the same
+    // fingers cannot drive both hyprpad and the compositor.
+    bool contactsClaimed() const;
     bool consumeClickSuppression();
     void noteKeyPressed();
 
@@ -66,6 +70,7 @@ class Daemon {
     void wake();
     void waitForWake(int timeoutMs);
     void recordLastGesture(const Gesture& gesture);
+    void setClaimed(bool claimed, bool swallowPointer);
 
     mutable std::mutex            m_configMutex;
     std::shared_ptr<const Config> m_config;
@@ -85,6 +90,8 @@ class Daemon {
     std::string            m_error;
 
     std::atomic<bool>      m_swallowMotion{false};
+    std::atomic<bool>      m_claimedContacts{false};
+    std::atomic<Micros>    m_lastTouchFrame{0};
     std::atomic<Micros>    m_clickUntil{0};
     std::atomic<Micros>    m_typingUntil{0};
     std::atomic<uint64_t>  m_gestureCount{0};

@@ -23,6 +23,13 @@ std::unique_ptr<Daemon>           g_daemon;
 CHyprSignalListener               g_mouseMoveListener;
 CHyprSignalListener               g_mouseButtonListener;
 CHyprSignalListener               g_keyboardListener;
+CHyprSignalListener               g_swipeBeginListener;
+CHyprSignalListener               g_swipeUpdateListener;
+CHyprSignalListener               g_swipeEndListener;
+// Compositor-thread only: true when the begin event of the swipe in flight was
+// cancelled because hyprpad owns those contacts. Its updates and end must be
+// cancelled too, or Hyprland's swipe state machine sees a partial gesture.
+bool                              g_swipeCancelled = false;
 std::atomic<uint64_t>             g_generation{0};
 
 constexpr const char* PLUGIN_NAME    = "hyprpad";
@@ -139,6 +146,27 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
             g_daemon->noteKeyPressed();
     });
 
+    // edgepad grabbed the pad, so a swipe that started on an edge never reached
+    // the compositor. A plugin cannot unsee libinput events, so cancel the
+    // built-in touchpad gesture instead: otherwise the same three fingers run a
+    // hyprpad binding and a compositor workspace swipe at once.
+    g_swipeBeginListener = events.gesture.swipe.begin.listen([](IPointer::SSwipeBeginEvent, Event::SCallbackInfo& info) {
+        g_swipeCancelled = g_daemon && g_daemon->contactsClaimed();
+        if (g_swipeCancelled)
+            info.cancelled = true;
+    });
+
+    g_swipeUpdateListener = events.gesture.swipe.update.listen([](IPointer::SSwipeUpdateEvent, Event::SCallbackInfo& info) {
+        if (g_swipeCancelled)
+            info.cancelled = true;
+    });
+
+    g_swipeEndListener = events.gesture.swipe.end.listen([](IPointer::SSwipeEndEvent, Event::SCallbackInfo& info) {
+        if (g_swipeCancelled)
+            info.cancelled = true;
+        g_swipeCancelled = false;
+    });
+
     HyprlandAPI::addDispatcherV2(handle, "hyprpad:status", [](std::string) -> SDispatchResult {
         if (!g_daemon)
             return {.success = false, .error = "hyprpad is not running"};
@@ -186,6 +214,10 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_mouseMoveListener.reset();
     g_mouseButtonListener.reset();
     g_keyboardListener.reset();
+    g_swipeBeginListener.reset();
+    g_swipeUpdateListener.reset();
+    g_swipeEndListener.reset();
+    g_swipeCancelled = false;
     if (g_daemon) {
         g_daemon->stop();
         g_daemon.reset();

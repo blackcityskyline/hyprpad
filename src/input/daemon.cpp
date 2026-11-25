@@ -235,7 +235,7 @@ void Daemon::stop() {
         m_thread.join();
     m_actions.stop();
     closeDevice();
-    m_swallowMotion.store(false);
+    setClaimed(false, false);
     if (m_wakeFd >= 0)
         close(m_wakeFd);
     m_wakeFd = -1;
@@ -279,7 +279,19 @@ void Daemon::recordLastGesture(const Gesture& gesture) {
 }
 
 bool Daemon::motionShouldBeSwallowed() const {
-    return m_swallowMotion.load();
+    // A palm resting in an edge zone keeps its contact claimed but emits no
+    // events. Without the liveness check that would swallow pointer motion
+    // from every other device until the palm lifts.
+    return m_swallowMotion.load() && steadyNowUs() - m_lastTouchFrame.load() < 250'000;
+}
+
+bool Daemon::contactsClaimed() const {
+    return m_claimedContacts.load();
+}
+
+void Daemon::setClaimed(bool claimed, bool swallowPointer) {
+    m_claimedContacts.store(claimed);
+    m_swallowMotion.store(claimed && swallowPointer);
 }
 
 bool Daemon::consumeClickSuppression() {
@@ -465,7 +477,7 @@ void Daemon::inputLoop() {
             closeDevice();
             engine.reset();
             applied.reset();
-            m_swallowMotion.store(false);
+            setClaimed(false, false);
             setStatus("no bindings");
             waitForWake(250);
             continue;
@@ -478,7 +490,7 @@ void Daemon::inputLoop() {
             closeDevice();
             engine.reset();
             applied.reset();
-            m_swallowMotion.store(false);
+            setClaimed(false, false);
         }
 
         if (!engine) {
@@ -543,13 +555,13 @@ void Daemon::inputLoop() {
             try {
                 const auto output = engine->advanceTime(steadyNowUs());
                 handleOutput(output, *config);
-                m_swallowMotion.store(config->swallowPointer && engine->hasClaimedContacts());
+                setClaimed(engine->hasClaimedContacts(), config->swallowPointer);
             } catch (const std::exception& exception) {
                 setStatus("recognizer error", exception.what());
                 closeDevice();
                 engine.reset();
                 applied.reset();
-                m_swallowMotion.store(false);
+                setClaimed(false, false);
             }
             continue;
         }
@@ -563,7 +575,7 @@ void Daemon::inputLoop() {
             closeDevice();
             engine.reset();
             applied.reset();
-            m_swallowMotion.store(false);
+            setClaimed(false, false);
             continue;
         }
 
@@ -589,6 +601,7 @@ void Daemon::inputLoop() {
                 }
 
                 if (event.type == EV_SYN && event.code == SYN_REPORT) {
+                    m_lastTouchFrame.store(steadyNowUs());
                     if (dropped) {
                         dropped = false;
                         frame.clear();
@@ -596,7 +609,7 @@ void Daemon::inputLoop() {
                         releasedButtons.clear();
                         if (!resyncEngine(m_device.fd, m_device.caps, *engine))
                             engine->processFrameAt({Event{EventType::SynDropped, 0}}, timestamp);
-                        m_swallowMotion.store(config->swallowPointer && engine->hasClaimedContacts());
+                        setClaimed(engine->hasClaimedContacts(), config->swallowPointer);
                         continue;
                     }
                     if (frame.empty())
@@ -625,7 +638,7 @@ void Daemon::inputLoop() {
                         handleOutput(gesturesOnly, *config);
                     }
                     handleOutput(output, *config);
-                    m_swallowMotion.store(config->swallowPointer && engine->hasClaimedContacts());
+                    setClaimed(engine->hasClaimedContacts(), config->swallowPointer);
                     continue;
                 }
 
@@ -661,12 +674,12 @@ void Daemon::inputLoop() {
             frame.clear();
             pressedButtons.clear();
             releasedButtons.clear();
-            m_swallowMotion.store(false);
+            setClaimed(false, false);
         }
     }
 
     closeDevice();
-    m_swallowMotion.store(false);
+    setClaimed(false, false);
 }
 
 } // namespace hyprpad

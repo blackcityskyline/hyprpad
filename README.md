@@ -108,7 +108,9 @@ ctest --test-dir build --output-on-failure
 | `edgepad devices`, `status`, `doctor` | `hl.plugin.hyprpad.devices()`, `hyprctl hyprpadstatus`, `hyprctl hyprpaddevices` |
 
 Only edge-owned contacts are affected. Everything else on the pad behaves as it
-did before the plugin was loaded.
+did before the plugin was loaded. While a claimed contact is down, the built-in
+touchpad swipe events are cancelled too, so the same fingers cannot drive both a
+hyprpad binding and a compositor gesture.
 
 ## License
 
